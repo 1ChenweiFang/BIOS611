@@ -1,0 +1,232 @@
+---
+title: "Homework 5"
+author: "Chenwei Fang"
+date: "2025-11-03"
+output: pdf_document
+---
+Here is Dockerfile for HW4
+```
+FROM rocker/verse 
+RUN R -e "install.packages(c('cluster','ggplot2','plotly','mvtnorm','mclust'))"
+```
+```{r}
+library("cluster")
+library("stats")
+library(mvtnorm)
+library("plotly")
+library("mclust")
+```
+
+```{r}
+#Output the figures and plots
+Directory <- "Users/chenweifang/Desktop/BIOS611/HW5/"  
+dir.create(file.path(Directory, "figures"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(Directory, "results"), recursive = TRUE, showWarnings = FALSE)
+```
+
+Question 1
+First, write a function to generate data. This function must generate n clusters, each containing k points, within an n-dimensional space. The cluster centers are located at the “positive corners” of an n-dimensional hypercube with a specified side_length
+```{r}
+#This is to create the hypercube clusters. It generates the clusters of points at an n-dimensional space, where each cluster is centered at a different vertex of the hypercube
+generate_hypercube_clusters <- function(n, k, side_length, noise_sd = 1.0) {
+  
+  centers <- diag(side_length, n)
+  
+  data_list <- lapply(1:n, function(i) {
+    rmvnorm(k, mean = centers[i, ], sigma = diag(noise_sd, n))
+  })
+  
+  X <- do.call(rbind, data_list)
+  y <- rep(1:n, each = k)
+  
+  return(list(X = X, y = y, centers = centers))
+}#generate basic factors in the n dimensions and then each factor point to to A corner of cube. Then generate the point there
+
+```
+Simulations
+```{r}
+#By following the simulation, we create a grid for dimension and side length. For each generation, we use the above functions and clusgap
+grid <- expand.grid(n = Dimensions, L = side_lengths, KEEP.OUT.ATTRS = FALSE)
+
+results <- do.call(rbind, lapply(seq_len(nrow(grid)), function(i) {
+  n <- grid$n[i]; L <- grid$L[i]
+  dat <- generate_hypercube_clusters(n, k, L, noise_sd)
+
+  FUNcluster <- function(x, k) {
+    km <- kmeans(x, centers = k, nstart = 20, iter.max = 50)
+    list(cluster = km$cluster)  
+  }
+
+  gap <- clusGap(dat$X, FUNcluster = FUNcluster, K.max = n + 3, B = 20)
+  best_k <- maxSE(gap$Tab[, "gap"], gap$Tab[, "SE.sim"], method = "Tibs2001SEmax")
+
+  cat("Finished n =", n, "L =", L, "-> k̂ =", best_k, "\n")
+  data.frame(Dimension = n, SideLength = L, EstimatedK = best_k, TrueK = n)
+}))
+
+write.csv(results, file.path(Directory, "results", "task1_results.csv"), row.names = FALSE)
+```
+#Create visualization
+```{r}
+#After running the simulation, we create the visulization, instead of combining them together, I used facet group to group them individually
+results_plot <- results %>%
+  group_by(Dimension, SideLength) %>%
+  summarise(
+    EstimatedK = mean(EstimatedK, na.rm = TRUE),
+    TrueK      = first(TrueK),
+    .groups    = "drop"
+  )
+
+ref_df <- results_plot %>%
+  distinct(Dimension, TrueK)
+
+p_facet <- ggplot(results_plot, aes(x = SideLength, y = EstimatedK, group = Dimension)) +
+  geom_point(size = 2) +
+  geom_line(linewidth = 0.7) +
+  geom_hline(data = ref_df, aes(yintercept = TrueK), linetype = "dashed", color = "red") +
+  scale_x_reverse(breaks = sort(unique(results_plot$SideLength), decreasing = TRUE)) +
+  facet_wrap(~ Dimension, ncol = 2, scales = "fixed")
+print(p_facet)
+ggsave(file.path(Directory, "figures", "task1_p_facet.png"))
+#From the graph shown below, I when k = 2, the side length that begin to drop is 2, when k = 3 is 3, when k = 4 is 4, when k =5 is 5, when k = 6 is 4
+```
+Task 2):
+
+```{r}
+#This cluster is different as it is a shell cluster, so we create a for loop to make the inner radius bigger and bigger
+generate_shell_clusters_fixed_gap <- function(n_shells, k_per_shell, gap = 1,
+                                              noise_sd = 0.1, inner_radius = 0.5) {
+  radii <- inner_radius + (0:(n_shells-1)) * gap
+  X <- matrix(NA_real_, n_shells*k_per_shell, 3)
+  y <- integer(n_shells*k_per_shell)
+  row <- 1
+  for (s in seq_len(n_shells)) {
+    r0 <- radii[s]
+    for (j in 1:k_per_shell) {
+      v <- rnorm(3); v <- v/sqrt(sum(v^2))
+      r <- max(r0 + rnorm(1, 0, noise_sd), 0)
+      X[row, ] <- r * v; y[row] <- s; row <- row + 1
+    }
+  }
+  list(x = X, y = y, radii = radii)
+}
+
+```
+
+
+```{r}
+#We create a plotly that visualized how the shell cluster look like
+demo <- generate_shell_clusters(
+  n_shells = 4, k_per_shell = 100, max_radius = 6,
+  noise_sd = 0.1)
+
+plot_ly(
+  x = demo$x[,1],
+  y = demo$x[,2],
+  z = demo$x[,3],
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(size = 3),
+  color = as.factor(demo$y)
+)
+```
+
+
+```{r}
+#All the functions are connected together and did the following steps: 1): build a similarity graph 2):compute the laplacian matrix 3): Eigen decomposition 4): cluster the eigenvector. Finally we clustgap.
+connectivity_matrix <- function(pts, threshold) {
+  d <- pts %>% as.matrix() %>% dist() %>% as.matrix()
+  con <- (d < threshold) * 1
+  diag(con) <- 0
+  con
+}
+
+adjacency_matrix <- function(conmat) {
+  conmat
+}
+
+degree_matrix <- function(conmat) {
+  diag(rowSums(adjacency_matrix(conmat)))
+}
+
+sqrtm <- function(m) {
+  eig <- eigen(m, symmetric = TRUE)
+  eig$vectors %*% diag(sqrt(eig$values)) %*% t(eig$vectors)
+}
+
+invsqrtm <- function(m) {
+  sqrtm(solve(m))
+}
+
+laplacian <- function(conmat) {
+  D <- degree_matrix(conmat)
+  A <- adjacency_matrix(conmat)
+  D - A
+}
+
+d_inv_sqrt <- function(D) {
+  d <- diag(D)
+  diag(ifelse(d > 0, 1 / sqrt(d), 0))
+}
+
+norm_laplacian <- function(conmat) {
+  L   <- laplacian(conmat)
+  D   <- degree_matrix(conmat)
+  Din <- d_inv_sqrt(D)
+  Din %*% L %*% Din
+}
+
+graph_laplacian_transform <- function(d, thresh, k = 2) {
+  conmat <- connectivity_matrix(d, thresh)
+  E      <- eigen(norm_laplacian(conmat), symmetric = TRUE)
+  idx    <- order(E$values)[1:k]
+  E$vectors[, idx, drop = FALSE]
+}
+
+graph_clusgap <- function(dataset, threshold, k = 2, ...) {
+  transformed_data <- graph_laplacian_transform(dataset, threshold, k)
+  clusGap(transformed_data, ...)
+}
+```
+
+```{r}
+#Simulations for the shell function and visualize the plot
+estimate_k_for_radius <- function(R,
+                                  n_shells = 4, k_per_shell = 100,
+                                  noise_sd = 0.1, inner_radius = 0.5,
+                                  d_threshold = 1, K.max = 6, B = 20, seed = 1) {
+  set.seed(seed)
+  dat <- generate_shell_clusters(n_shells, k_per_shell, R, noise_sd, inner_radius)
+  X <- dat$x
+
+  FUNcluster <- function(x, k) {
+    x <- as.matrix(x)
+    U <- graph_laplacian_transform(x, thresh = d_threshold, k = k)
+    km <- kmeans(U, centers = k, nstart = 10)
+    list(cluster = km$cluster)
+  }
+
+  gap <- clusGap(X, FUNcluster = FUNcluster, K.max = K.max, B = B)
+  k_hat <- maxSE(gap$Tab[, "gap"], gap$Tab[, "SE.sim"], method = "Tibs2001SEmax")
+  data.frame(max_radius = R, k_hat = k_hat)
+}
+
+res_k <- do.call(rbind, lapply(10:0, estimate_k_for_radius))
+print(res_k)
+
+write.csv(res_k, file.path(Directory, "results", "task2_results_k.csv"), row.names = FALSE)
+
+ #find the first radium when k_hat < 4
+first_fail_idx <- which(res_k$k_hat < 4)[1]
+R_crit <- if (!is.na(first_fail_idx)) res_k$max_radius[first_fail_idx] else NA
+
+
+ggplot(res_k, aes(x = max_radius, y = k_hat)) +
+  geom_line(linewidth = 1.2) +
+  geom_point() +
+  geom_hline(yintercept = 4, linetype = "dashed", color = "red") +
+  { if (!is.na(R_crit)) geom_vline(xintercept = R_crit, linetype = "dotted") } +
+  scale_x_continuous(breaks = res_k$max_radius)
+ggsave(file.path(Directory, "figures", "task2_p2.png"))
+
+```
