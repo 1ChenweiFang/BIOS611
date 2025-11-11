@@ -46,40 +46,41 @@ generate_hypercube_clusters <- function(n, k, side_length, noise_sd = 1.0) {
 Simulations
 ```{r}
 #By following the simulation, we create a grid for dimension and side length. For each generation, we use the above functions and clusgap
-grid <- expand.grid(n = Dimensions, L = side_lengths, KEEP.OUT.ATTRS = FALSE)
+param_grid <- expand.grid(n = Dimensions, L = side_lengths, KEEP.OUT.ATTRS = FALSE)
 
-results <- do.call(rbind, lapply(seq_len(nrow(grid)), function(i) {
-  n <- grid$n[i]; L <- grid$L[i]
+summary_results <- do.call(rbind, lapply(seq_len(nrow(param_grid)), function(i) {
+  n <- param_grid$n[i]
+  L <- param_grid$L[i]
   dat <- generate_hypercube_clusters(n, k, L, noise_sd)
-
   FUNcluster <- function(x, k) {
     km <- kmeans(x, centers = k, nstart = 20, iter.max = 50)
-    list(cluster = km$cluster)  
+    list(cluster = km$cluster)
   }
-
-  gap <- clusGap(dat$X, FUNcluster = FUNcluster, K.max = n + 3, B = 20)
-  best_k <- maxSE(gap$Tab[, "gap"], gap$Tab[, "SE.sim"], method = "Tibs2001SEmax")
-
-  cat("Finished n =", n, "L =", L, "-> k̂ =", best_k, "\n")
-  data.frame(Dimension = n, SideLength = L, EstimatedK = best_k, TrueK = n)
+  gap_res <- clusGap(dat$X, FUNcluster = FUNcluster, K.max = n + 3, B = 20)
+  best_k <- maxSE(gap_res$Tab[, "gap"], gap_res$Tab[, "SE.sim"], method = "Tibs2001SEmax")
+  cat("n =", n, ", L =", L, "→ k̂ =", best_k, "\n")
+  data.frame(
+    Dimension = n,
+    SideLength = L,
+    EstimatedK = best_k,
+    TrueK = n
+  )
 }))
 
-write.csv(results, file.path(Directory, "results", "task1_results.csv"), row.names = FALSE)
+write.csv(summary_results, file.path(Directory, "results", "task1_results.csv"), row.names = FALSE)
 ```
 #Create visualization
 ```{r}
 #After running the simulation, we create the visulization, instead of combining them together, I used facet group to group them individually
-results_plot <- results %>%
+results_plot <- summary_results %>%
   group_by(Dimension, SideLength) %>%
   summarise(
     EstimatedK = mean(EstimatedK, na.rm = TRUE),
     TrueK      = first(TrueK),
     .groups    = "drop"
   )
-
 ref_df <- results_plot %>%
   distinct(Dimension, TrueK)
-
 p_facet <- ggplot(results_plot, aes(x = SideLength, y = EstimatedK, group = Dimension)) +
   geom_point(size = 2) +
   geom_line(linewidth = 0.7) +
